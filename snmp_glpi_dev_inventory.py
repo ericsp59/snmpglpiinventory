@@ -32,7 +32,7 @@ if not os.path.exists(cur_dir+'/tmp'):
 date_now =  datetime.now().strftime("%d-%m-%Y")
 
 
-parts_count = 1
+parts_count = 7
 
 community_list = [ 'public', 'Avaya_RO', 'gvc_RD']
 # community_list = ['Avaya_RO', 'gvc_RD']
@@ -69,7 +69,7 @@ def split_list(lst, c_num):
 def get_glpi_inventory_info(host, community, i):
     # print(f'get inv file {host} {community}')
     try:
-        os.system(f'glpi-netinventory --host {host} --credentials version:2c,community:{community} > {cur_dir}/tmp/{i}_{host}_{community}_inv.xml')    
+        os.system(f'glpi-netinventory --host {host} --timeout 3 --credentials version:2c,community:{community} > {cur_dir}/tmp/{i}_{host}_{community}_inv.xml')    
     except:
         print(f'error_glpi-netinventory: {host}_{community}')
 
@@ -91,6 +91,7 @@ def nmap_ping_scan(network_prefix,i):
     nm = nmap.PortScanner()
     try:
         ping_scan_raw_result = nm.scan(hosts=network_prefix, arguments='-v -n -sn')
+        # ping_scan_raw_result = nm.scan(hosts=network_prefix, arguments='-v -n -sn -host-timeout 5s --min-parallelism 20')
         host_list = [result['addresses']['ipv4'] for result in ping_scan_raw_result['scan'].values() if
                     result['status']['state'] == 'up']
         # down_host_list = [result['addresses']['ipv4'] for result in ping_scan_raw_result['scan'].values() if
@@ -106,7 +107,8 @@ def nmap_ping_scan(network_prefix,i):
         if (host_list != []):
             for host in host_list:
                 try:    
-                    ping_scan_161_raw_result = nm.scan(hosts=host, arguments='-sU -p 161')
+                    # ping_scan_161_raw_result = nm.scan(hosts=host, arguments='-sU -p 161 ')
+                    ping_scan_161_raw_result = nm.scan(hosts=host, arguments='-sU -p 161 -host-timeout 5s --min-parallelism 20')
 
                     for result in ping_scan_161_raw_result['scan'].values():
                         if result['udp'][161]['state'] == 'open':
@@ -206,13 +208,16 @@ def ingect_custom_snmp_info(host, community, name, dev_location,i):
             last_reg_date = f'регистрация {dt_string}' if registration == 'registered' else ''
             
 
-            new_file_str = fileStr.replace('<TYPE>PHONE</TYPE>',
+            new_file_str1 = fileStr.replace('<TYPE>PHONE</TYPE>',
             f'''<SERIAL>{snmp_phone_info_dict['serial_num']}</SERIAL>
             <TYPE>PHONE</TYPE>
             <LOCATION>{dev_location}</LOCATION>
             <COMMENT>{last_reg_date}</COMMENT>
             <CONTACT_NUM>{snmp_phone_info_dict['phone_num']}</CONTACT_NUM>
             <CONTACT>{registration}: {snmp_phone_info_dict['user']}</CONTACT>''')
+
+            new_file_str = new_file_str1 .replace('<MODEL>J129D03A</MODEL>',
+            f'''<MODEL>{snmp_phone_info_dict['model']}</MODEL>''')
 
             res_inv_file = open(f'{cur_dir}/tmp/{i}_{host}_{community}_inv.xml', "w", encoding='utf-8')
             res_inv_file.write(new_file_str) 
@@ -288,20 +293,31 @@ def get_avaya_snmp_info(host, community,  name):
     res = {}
     new_name = name.replace(' ','')
     for oid in oid_dicts_list[new_name]:
-        res.update({oid: get_oid_param(host, oid_dicts_list[new_name][oid], community)})
+        try:
+            res_oid = get_oid_param(host, oid_dicts_list[new_name][oid], community)
+            # print(f'!!!res_oid: {res_oid}!!!')
+            res.update({
+                oid: res_oid
+                })
+        except Exception as e:
+            print(f'!!!res_oid!!!: {i} {host} {oid}\n {e}\n{res_oid}\n')      
     return res
 
 
 
 
 cmdGen = cmdgen.CommandGenerator()
-
-def get_oid_param(phone_ip, oid_type, community):
+def get_oid_param(dev_ip, oid_type, community):
     errorIndication, errorStatus, errorIndex, varBindTable = cmdGen.nextCmd(
     cmdgen.CommunityData(community),
-    cmdgen.UdpTransportTarget((phone_ip, 161)),oid_type)
+    cmdgen.UdpTransportTarget((dev_ip, 161)),  
+    cmdgen.MibVariable(oid_type),
+    lookupMib=True,   
+    )
+
     if errorIndication:
         print(errorIndication)
+        # sys.exit()
     else:
         if errorStatus:
             print('%s at %s' % (
@@ -310,10 +326,35 @@ def get_oid_param(phone_ip, oid_type, community):
         else:
             current_dict = {}
             current_param = ''
-            for varBindTableRow in varBindTable:
-                for name, val in varBindTableRow:
-                    current_param += val.prettyPrint()
-                return current_param
+            try:
+                for varBindTableRow in varBindTable:
+                    for name, val in varBindTableRow:
+                        # print(name.prettyPrint(), val.prettyPrint())
+                        current_param += val.prettyPrint()
+                        current_param += ';'
+                # print('---')        
+                # print(current_param[:-1])        
+                return current_param[:-1]
+            except Exception as e:
+                print(f'!!!get_oid_param_func!!!: {dev_ip} {oid_type} {community}\n {e}\n')     
+# def get_oid_param(phone_ip, oid_type, community):
+#     errorIndication, errorStatus, errorIndex, varBindTable = cmdGen.nextCmd(
+#     cmdgen.CommunityData(community),
+#     cmdgen.UdpTransportTarget((phone_ip, 161)),oid_type)
+#     if errorIndication:
+#         print(errorIndication)
+#     else:
+#         if errorStatus:
+#             print('%s at %s' % (
+#             errorStatus.prettyPrint(),
+#             errorIndex and varBindTable[-1][int(errorIndex)-1] or '?'))
+#         else:
+#             current_dict = {}
+#             current_param = ''
+#             for varBindTableRow in varBindTable:
+#                 for name, val in varBindTableRow:
+#                     current_param += val.prettyPrint()
+#                 return current_param
 
 
 def add_dev_inventory(id_region_net_tuple,i):

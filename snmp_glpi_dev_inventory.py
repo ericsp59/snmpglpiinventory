@@ -32,7 +32,7 @@ if not os.path.exists(cur_dir+'/tmp'):
 date_now =  datetime.now().strftime("%d-%m-%Y")
 
 
-parts_count = 7
+parts_count = 4
 
 community_list = [ 'public', 'Avaya_RO', 'gvc_RD']
 # community_list = ['Avaya_RO', 'gvc_RD']
@@ -129,11 +129,53 @@ def nmap_ping_scan(network_prefix,i):
 def change_tag_value(host, community, tag_name, tag_value,i):
     inv_file = open(f'{cur_dir}/tmp/{i}_{host}_{community}_inv.xml', "r", encoding='utf-8')
     fileStr = inv_file.read()
-    pattern = f'<{tag_name}>.*</{tag_name}>'
-    new_file_str = re.sub(pattern, f'<{tag_name}>{tag_value}</{tag_name}>', fileStr)
-    res_inv_file = open(f'{cur_dir}/tmp/{i}_{host}_{community}_inv.xml', "w", encoding='utf-8')
-    res_inv_file.write(new_file_str) 
-    res_inv_file.close()            
+
+    info_pattern = f'<INFO>.*</INFO>'
+    info_pattern_match_res = re.search(info_pattern, fileStr.replace('\n','---'))
+    # print(f'====\ninfo_patern\n {info_pattern_match_res}\n====')
+    if (info_pattern_match_res != None):
+        info_file_str = info_pattern_match_res.group(0)
+        # print(info_file_str.replace('---','\n'))
+
+        pattern = f'<{tag_name}>.*</{tag_name}>'
+        is_tag_exist = re.search(pattern, info_file_str)
+
+        if (is_tag_exist != None):
+            new_info_file_str = re.sub(pattern, f'<{tag_name}>{tag_value}</{tag_name}>', info_file_str)
+            new_file_str = re.sub(info_pattern, new_info_file_str.replace('---','\n'), fileStr.replace('\n','---'))
+            res_inv_file = open(f'{cur_dir}/tmp/{i}_{host}_{community}_inv.xml', "w", encoding='utf-8')
+            res_inv_file.write(new_file_str.replace('---','\n')) 
+            res_inv_file.close()
+        else:
+            new_info_file_str = re.sub(r'<INFO>', f'<INFO>\n\t\t\t\t<{tag_name}>{tag_value}</{tag_name}>', info_file_str)  
+            new_file_str = re.sub(info_pattern, new_info_file_str.replace('---','\n'), fileStr.replace('\n','---'))  
+            res_inv_file = open(f'{cur_dir}/tmp/{i}_{host}_{community}_inv.xml', "w", encoding='utf-8')
+            res_inv_file.write(new_file_str.replace('---','\n')) 
+            res_inv_file.close()
+
+def change_port_ip(host, community, tag_name, tag_value,i): ## for printers  
+    inv_file = open(f'{cur_dir}/tmp/{i}_{host}_{community}_inv.xml', "r", encoding='utf-8')
+    fileStr = inv_file.read()
+    port_pattern = f'<PORT>.*</PORT>'
+    port_pattern_match_res = re.search(port_pattern, fileStr.replace('\n','---'))
+    if (port_pattern_match_res != None):
+        port_file_str = port_pattern_match_res.group(0)  
+
+        pattern = f'<{tag_name}>.*</{tag_name}>'
+        is_tag_exist = re.search(pattern, port_file_str)
+
+        if (is_tag_exist != None):
+            new_port_file_str = re.sub(pattern, f'<{tag_name}>{tag_value}</{tag_name}>', port_file_str)
+            new_file_str = re.sub(port_pattern, new_port_file_str.replace('---','\n'), fileStr.replace('\n','---'))
+            res_inv_file = open(f'{cur_dir}/tmp/{i}_{host}_{community}_inv.xml', "w", encoding='utf-8')
+            res_inv_file.write(new_file_str.replace('---','\n')) 
+            res_inv_file.close()
+        else:
+            new_port_file_str = re.sub(r'<PORT>', f'<PORT>\n\t\t\t\t<{tag_name}>{tag_value}</{tag_name}>', port_file_str)  
+            new_file_str = re.sub(port_pattern, new_port_file_str.replace('---','\n'), fileStr.replace('\n','---'))  
+            res_inv_file = open(f'{cur_dir}/tmp/{i}_{host}_{community}_inv.xml', "w", encoding='utf-8')
+            res_inv_file.write(new_file_str.replace('---','\n')) 
+            res_inv_file.close()                
 
 def inject_dev(host, community, location,i):
     try:
@@ -151,20 +193,22 @@ def ingect_custom_snmp_info(host, community, name, dev_location,i):
     if (str(name) == 'MFC-9340CDW'):
         try:
             snmp_phone_info_dict = get_brother_MFC_9340CDW_snmp_info(host, community, name)
-            inv_file = open(f'{cur_dir}/tmp/{i}_{host}_{community}_inv.xml', "r", encoding='utf-8')
-            fileStr = inv_file.read()
-            
-            new_file_str1 = fileStr.replace('<MODEL>MFC-9340CDW</MODEL>',
-            f'''<MODEL>{snmp_phone_info_dict['model']}</MODEL>
-            <LOCATION>{dev_location}</LOCATION>''')
 
-            new_file_str = new_file_str1.replace('<PORT>',
-            f'''<PORT>
-            <IP>{host}</IP>''')
+            change_tag_value(host, community, 'LOCATION', dev_location,i)
+            change_tag_value(host, community, 'MODEL', snmp_phone_info_dict['model'],i)
+            change_port_ip(host, community, 'IP', host,i)
 
-            res_inv_file = open(f'{cur_dir}/tmp/{i}_{host}_{community}_inv.xml', "w", encoding='utf-8')
-            res_inv_file.write(new_file_str) 
-            res_inv_file.close()
+            # inv_file = open(f'{cur_dir}/tmp/{i}_{host}_{community}_inv.xml', "r", encoding='utf-8')
+            # fileStr = inv_file.read()
+            # new_file_str1 = fileStr.replace('<MODEL>MFC-9340CDW</MODEL>',
+            # f'''<MODEL>{snmp_phone_info_dict['model']}</MODEL>
+            # <LOCATION>{dev_location}</LOCATION>''')
+            # new_file_str = new_file_str1.replace('<PORT>',
+            # f'''<PORT>
+            # <IP>{host}</IP>''')
+            # res_inv_file = open(f'{cur_dir}/tmp/{i}_{host}_{community}_inv.xml', "w", encoding='utf-8')
+            # res_inv_file.write(new_file_str) 
+            # res_inv_file.close()
             try:
                 print(f'{host}: ingect_custom_snmp_info')  
                 os.system(f'glpi-injector -v -r --file {cur_dir}/tmp/{i}_{host}_{community}_inv.xml --debug --url http://10.32.52.110/glpi/front/inventory.php')
@@ -178,16 +222,20 @@ def ingect_custom_snmp_info(host, community, name, dev_location,i):
     if (str(name) == 'Brother NC-9300h'):
         try:
             snmp_phone_info_dict = get_brother_NC_9300h_snmp_info(host, community, name)
-            inv_file = open(f'{cur_dir}/tmp/{i}_{host}_{community}_inv.xml', "r", encoding='utf-8')
-            fileStr = inv_file.read()
-            
-            new_file_str = fileStr.replace('<MODEL>NC-9300h</MODEL>',
-            f'''<MODEL>{snmp_phone_info_dict['model']}</MODEL>
-            <LOCATION>{dev_location}</LOCATION>''')
 
-            res_inv_file = open(f'{cur_dir}/tmp/{i}_{host}_{community}_inv.xml', "w", encoding='utf-8')
-            res_inv_file.write(new_file_str) 
-            res_inv_file.close()
+            change_tag_value(host, community, 'LOCATION', dev_location,i)
+            change_tag_value(host, community, 'MODEL', snmp_phone_info_dict['model'], i)
+            # snmp_phone_info_dict = get_brother_NC_9300h_snmp_info(host, community, name)
+            # inv_file = open(f'{cur_dir}/tmp/{i}_{host}_{community}_inv.xml', "r", encoding='utf-8')
+            # fileStr = inv_file.read()
+            
+            # new_file_str = fileStr.replace('<MODEL>NC-9300h</MODEL>',
+            # f'''<MODEL>{snmp_phone_info_dict['model']}</MODEL>
+            # <LOCATION>{dev_location}</LOCATION>''')
+
+            # res_inv_file = open(f'{cur_dir}/tmp/{i}_{host}_{community}_inv.xml', "w", encoding='utf-8')
+            # res_inv_file.write(new_file_str) 
+            # res_inv_file.close()
             try:
                 os.system(f'glpi-injector -v -r --file {cur_dir}/tmp/{i}_{host}_{community}_inv.xml --debug --url http://10.32.52.110/glpi/front/inventory.php')
             except:
@@ -199,29 +247,37 @@ def ingect_custom_snmp_info(host, community, name, dev_location,i):
     if (str(name) == 'Avaya Phone'):
         try:
             snmp_phone_info_dict = get_avaya_snmp_info(host, community, name)
-            inv_file = open(f'{cur_dir}/tmp/{i}_{host}_{community}_inv.xml', "r", encoding='utf-8')
-            fileStr = inv_file.read()
 
             registration = 'registered' if snmp_phone_info_dict['reg_state']=='2' else 'not_reg'
             now = datetime.now()
             dt_string = now.strftime("%d/%m/%Y")
             last_reg_date = f'регистрация {dt_string}' if registration == 'registered' else ''
-            
 
-            new_file_str1 = fileStr.replace('<TYPE>PHONE</TYPE>',
-            f'''<SERIAL>{snmp_phone_info_dict['serial_num']}</SERIAL>
-            <TYPE>PHONE</TYPE>
-            <LOCATION>{dev_location}</LOCATION>
-            <COMMENT>{last_reg_date}</COMMENT>
-            <CONTACT_NUM>{snmp_phone_info_dict['phone_num']}</CONTACT_NUM>
-            <CONTACT>{registration}: {snmp_phone_info_dict['user']}</CONTACT>''')
+            change_tag_value(host, community, 'LOCATION', dev_location,i)
+            change_tag_value(host, community, 'SERIAL', snmp_phone_info_dict['serial_num'],i)
+            change_tag_value(host, community, 'COMMENT', last_reg_date,i)
+            change_tag_value(host, community, 'CONTACT_NUM', snmp_phone_info_dict['phone_num'], i)
+            change_tag_value(host, community, 'MODEL', snmp_phone_info_dict['model'],i)
+            change_tag_value(host, community, 'CONTACT', f"{registration}: {snmp_phone_info_dict['user']}",i)
 
-            new_file_str = new_file_str1 .replace('<MODEL>J129D03A</MODEL>',
-            f'''<MODEL>{snmp_phone_info_dict['model']}</MODEL>''')
-
-            res_inv_file = open(f'{cur_dir}/tmp/{i}_{host}_{community}_inv.xml', "w", encoding='utf-8')
-            res_inv_file.write(new_file_str) 
-            res_inv_file.close()
+            # inv_file = open(f'{cur_dir}/tmp/{i}_{host}_{community}_inv.xml', "r", encoding='utf-8')
+            # fileStr = inv_file.read()
+            # registration = 'registered' if snmp_phone_info_dict['reg_state']=='2' else 'not_reg'
+            # now = datetime.now()
+            # dt_string = now.strftime("%d/%m/%Y")
+            # last_reg_date = f'регистрация {dt_string}' if registration == 'registered' else ''
+            # new_file_str1 = fileStr.replace('<TYPE>PHONE</TYPE>',
+            # f'''<SERIAL>{snmp_phone_info_dict['serial_num']}</SERIAL>
+            # <TYPE>PHONE</TYPE>
+            # <LOCATION>{dev_location}</LOCATION>
+            # <COMMENT>{last_reg_date}</COMMENT>
+            # <CONTACT_NUM>{snmp_phone_info_dict['phone_num']}</CONTACT_NUM>
+            # <CONTACT>{registration}: {snmp_phone_info_dict['user']}</CONTACT>''')
+            # new_file_str = new_file_str1 .replace('<MODEL>J129D03A</MODEL>',
+            # f'''<MODEL>{snmp_phone_info_dict['model']}</MODEL>''')
+            # res_inv_file = open(f'{cur_dir}/tmp/{i}_{host}_{community}_inv.xml', "w", encoding='utf-8')
+            # res_inv_file.write(new_file_str) 
+            # res_inv_file.close()
             try:
                 os.system(f'glpi-injector -v -r --file {cur_dir}/tmp/{i}_{host}_{community}_inv.xml --debug --url http://10.32.52.110/glpi/front/inventory.php')
             except:

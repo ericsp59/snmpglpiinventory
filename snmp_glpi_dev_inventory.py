@@ -1,6 +1,7 @@
 from pysnmp.entity.rfc3413.oneliner import cmdgen
 from pysnmp.entity import engine, config
-# from mysql.connector import connect, Error
+from pysnmp.smi import compiler, view, rfc1902											  
+from mysql.connector import connect, Error
 from copy import copy, deepcopy
 import nmap
 import json
@@ -16,12 +17,16 @@ import subprocess
 import xml.etree.ElementTree as ET
 from xml.dom import minidom
 
+import numpy as np
+
+storage_db_type = 'PluginGenericobjectStoragesystem'
+
 # mydb = connect(
-#     host="localhost",
-#     user="root",
-#     password="glpi1234$",
-#     database="glpi"
-# )
+#      host="localhost",
+#      user="root",
+#      password="glpi1234$",
+#      database="glpi"
+#  )
 
 cur_dir = os.path.dirname(os.path.abspath(__file__))
 if not os.path.exists(cur_dir+'/logs'):
@@ -32,11 +37,11 @@ if not os.path.exists(cur_dir+'/tmp'):
 date_now =  datetime.now().strftime("%d-%m-%Y")
 
 
-parts_count = 4
+parts_count = 1
 
 community_list = [ 'public', 'Avaya_RO', 'gvc_RD']
 # community_list = ['Avaya_RO', 'gvc_RD']
-custom_names_list = ['Avaya Phone', 'Brother NC-9300h', 'MFC-9340CDW']
+custom_names_list = ['OceanStor Dorado 5000','Avaya Phone', 'Brother NC-9300h', 'MFC-9340CDW']
 
 def check_snmp_community_connect(host, community):
     try:
@@ -126,6 +131,7 @@ def nmap_ping_scan(network_prefix,i):
         print(f'error_nmap_ping_scan: {network_prefix}\n {e}\n')            
 
 
+
 def change_tag_value(host, community, tag_name, tag_value,i):
     inv_file = open(f'{cur_dir}/tmp/{i}_{host}_{community}_inv.xml', "r", encoding='utf-8')
     fileStr = inv_file.read()
@@ -188,11 +194,258 @@ def inject_dev(host, community, location,i):
     except:
         print(f'error_inject_dev: {host}_{community}')
 
+def find_value_in_tag(tag_name, f_str):
+    pattern = f'<{tag_name}>.*</{tag_name}>'
+    tmp = re.search(pattern, f_str).group()
+    return tmp.replace(f'<{tag_name}>','').replace(f'</{tag_name}>', '')
+
+
+def select_storagesystems_serial_query(serial):
+    query = f"SELECT id, name, manufacturers_id, plugin_genericobject_storagesystemmodels_id from glpi_plugin_genericobject_storagesystems WHERE serial='{serial}'" 
+    return query
+
+def create_storage_in_db(snmp_dev_info_dict):
+    now = datetime.now()
+    # dd/mm/YY H:M:S
+    dt_string = now.strftime("%d/%m/%Y %H:%M:%S") 
 
 def ingect_custom_snmp_info(host, community, name, dev_location,i):
+    mydb = connect(
+    host="localhost",
+    user="root",
+    password="glpi1234$",
+    database="glpi"
+)
+    if (str(name) == 'OceanStor Dorado 5000'):
+        try:
+            snmp_dev_info_dict = get_OceanStor_Dorado_5000_snmp_info(host, community, name)
+
+            # print(snmp_dev_info_dict)
+            inv_file = open(f'{cur_dir}/tmp/{i}_{host}_{community}_inv.xml', "r", encoding='utf-8')
+            fileStr = inv_file.read()
+            model = find_value_in_tag('MODEL', fileStr)
+            name = find_value_in_tag('NAME', fileStr)
+            manufacturer = find_value_in_tag('MANUFACTURER', fileStr)
+
+            snmp_dev_info_dict.update({'name': [name]})
+            snmp_dev_info_dict.update({'model':[model]})
+            snmp_dev_info_dict.update({'manufacturer': [manufacturer]})
+
+            for key, val in snmp_dev_info_dict.items():
+                print(f'{key}: {val}')
+
+            dev_name = snmp_dev_info_dict['name'][0]
+            dev_serial = snmp_dev_info_dict['serial'][0]
+            dev_model = snmp_dev_info_dict['model'][0]
+            dev_manufacturer = snmp_dev_info_dict['manufacturer'][0]
+            dev_ips = snmp_dev_info_dict['ip_address']
+            dev_mac = snmp_dev_info_dict['mac']
+            dev_lun_groups = snmp_dev_info_dict['lun_groups']
+            dev_host_groups = snmp_dev_info_dict['host_groups']
+            dev_storage_pools = snmp_dev_info_dict['storage_pools']
+
+            dev_db_name = None
+            dev_model_db_id = None     
+            dev_manufacturer_db_id = None
+            dev_ip_ids = None
+
+            dev_db_id = None   
+
+            try:
+                with mydb as connection:
+                    print('connection to DB OK')
+                    with connection.cursor() as cursor:
+                        cursor.execute(select_storagesystems_serial_query(dev_serial))
+                        r = cursor.fetchall()
+                        #### IF DEV NOT EXIST
+                        if (r == []):
+                            #### Check and get model_id
+                            cursor.execute(f"SELECT id FROM glpi_plugin_genericobject_storagesystemmodels WHERE name='{dev_model}'")
+                            r = cursor.fetchall() 
+                            if (r == []):
+                                cursor.execute(f"INSERT INTO glpi_plugin_genericobject_storagesystemmodels (name, date_creation) values ('{dev_model}', now())")
+                                connection.commit()
+                                cursor.execute(f"SELECT id FROM glpi_plugin_genericobject_storagesystemmodels WHERE name='{dev_model}'")
+                                r = cursor.fetchall() 
+                                if (r != []): dev_model_db_id = r[0][0]
+                            else: dev_model_db_id = r[0][0]
+
+                            #### Check and get manufacturer_id
+                            cursor.execute(f"SELECT id FROM glpi_manufacturers WHERE name='{dev_manufacturer}'")
+                            r = cursor.fetchall() 
+                            if (r == []):
+                                cursor.execute(f"INSERT INTO glpi_manufacturers (name, date_creation) values ('{dev_manufacturer}', now())")
+                                connection.commit()
+                                cursor.execute(f"SELECT id FROM glpi_manufacturers WHERE name='{dev_manufacturer}'")
+                                r = cursor.fetchall() 
+                                if (r != []): dev_manufacturer_db_id = r[0][0]
+                            else: dev_manufacturer_db_id = r[0][0]
+
+                            #### ## INSERT DEV
+                            cursor.execute(f"INSERT INTO glpi_plugin_genericobject_storagesystems (name, serial, manufacturers_id, date_creation, plugin_genericobject_storagesystemmodels_id) values ('{dev_name}', '{dev_serial}', {dev_manufacturer_db_id}, NOW(), {dev_model_db_id})")
+                            connection.commit()
+                            cursor.execute(select_storagesystems_serial_query(dev_serial))
+                            r = cursor.fetchall()
+                            if (r != []): dev_db_id = r[0][0]
+                        
+                        #### IF DEV EXIST
+                        else:
+                            dev_db_id = r[0][0]
+                            dev_db_name = r[0][1]
+                            dev_manufacturer_db_id = r[0][2] 
+                            dev_model_db_id = r[0][3]
+
+                        #### Check and create IPs
+                        for ip in dev_ips:
+                            cursor.execute(f"SELECT id FROM glpi_ipaddresses WHERE name='{ip}' and mainitems_id = {dev_db_id} and mainitemtype='{storage_db_type}'")
+                            r = cursor.fetchall()
+                            if (r != []):
+                                # print(f'{ip}: {r[0][0]}')
+                                pass
+                            else:
+                                cursor.execute(f"INSERT INTO glpi_ipaddresses (name, itemtype, mainitems_id, mainitemtype) values ('{ip}','NetworkName',{dev_db_id},'{storage_db_type}')")
+                                connection.commit()
+
+                        #### Check and create MAC           
+                        for mac in dev_mac:
+                            cursor.execute(f"SELECT id FROM glpi_networkports WHERE mac='{mac}' and items_id = {dev_db_id} and itemtype='{storage_db_type}'")
+                            r = cursor.fetchall()
+                            if (r != []):
+                                # print(f'{mac}: {r[0][0]}')
+                                pass
+                            else:
+                                cursor.execute(f"INSERT INTO glpi_networkports (items_id, mac, itemtype) values ('{dev_db_id}','{mac}','{storage_db_type}')")
+                                connection.commit() 
+
+                        # #### Check and create LUN
+                        # for lun_gr in dev_lun_groups:
+                        #     for key, val in lun_gr.items():
+                        #         lun_gr_str = ''
+                        #         for k,v in val.items():
+                        #             lun_gr_str += k+': '+v+'\n'
+                        #         print(f'string - {lun_gr_str}')
+                        #         cursor.execute(f"SELECT id FROM glpi_plugin_fields_plugingenericobjectstoragesystemstorgeinfos WHERE items_id = {dev_db_id} and itemtype='{storage_db_type}'")
+                        #         r = cursor.fetchall()
+                        #         if (r != []):
+                        #             print(f'Check and create LUN - exist')
+                        #             pass
+                        #         else:
+                        #             cursor.execute(f"INSERT INTO glpi_plugin_fields_plugingenericobjectstoragesystemstorgeinfos (items_id, itemtype, plugin_fields_containers_id, lungroupfield) values ({dev_db_id},'{storage_db_type}', 1, '{lun_gr_str}')")
+                        #             connection.commit()
+
+                        # #### Check and create hostgroup
+                        # for host_gr in dev_host_groups:
+                        #     for key, val in host_gr.items():
+                        #         host_gr_str = ''
+                        #         for k,v in val.items():
+                        #             host_gr_str += k+': '+v+'\n'
+                        #         print(f'string - {host_gr_str}')
+                        #         cursor.execute(f"SELECT id FROM glpi_plugin_fields_plugingenericobjectstoragesystemstorgeinfos WHERE items_id = {dev_db_id} and itemtype='{storage_db_type}'")
+                        #         r = cursor.fetchall()
+                        #         if (r != []):
+                        #             print(f'Check and create hostgroup - exist')
+                        #             pass
+                        #         else:
+                        #             cursor.execute(f"INSERT INTO glpi_plugin_fields_plugingenericobjectstoragesystemstorgeinfos (items_id, itemtype, plugin_fields_containers_id, hostgroupfield) values ({dev_db_id},'{storage_db_type}', 1, '{host_gr_str}')")
+                        #             connection.commit()
+
+                        # #### Check and create storage_pools
+                        # for storage_pool in dev_storage_pools:
+                        #     for key, val in storage_pool.items():
+                        #         storage_pool_str = ''
+                        #         for k,v in val.items():
+                        #             storage_pool_str += k+': '+v+'\n'
+                        #         print(f'string - {storage_pool_str}')
+                        #         cursor.execute(f"SELECT id FROM glpi_plugin_fields_plugingenericobjectstoragesystemstorgeinfos WHERE items_id = {dev_db_id} and itemtype='{storage_db_type}'")
+                        #         r = cursor.fetchall()
+                        #         if (r != []):
+                        #             print(f'Check and create storage_pools - exist')
+                        #             pass
+                        #         else:
+                        #             cursor.execute(f"INSERT INTO glpi_plugin_fields_plugingenericobjectstoragesystemstorgeinfos (items_id, itemtype, plugin_fields_containers_id, storagepoolfield) values ({dev_db_id},'{storage_db_type}', 1, '{storage_pool_str}')")
+                        #             connection.commit()    
+
+
+                        #### Check and create storage_system_storgeinfo
+                        lun_gr_str = ''
+                        for lun_gr in dev_lun_groups:
+                            for key, val in lun_gr.items():
+                                for k,v in val.items():
+                                    lun_gr_str += k+': '+v+'\n'
+                                # print(f'string - {lun_gr_str}') 
+
+                        host_gr_str = ''
+                        for host_gr in dev_host_groups:
+                            for key, val in host_gr.items():
+                                for k,v in val.items():
+                                    host_gr_str += k+': '+v+'\n'
+                                # print(f'string - {host_gr_str}')                                
+
+                        storage_pool_str = ''
+                        for storage_pool in dev_storage_pools:
+                            for key, val in storage_pool.items():
+                                for k,v in val.items():
+                                    storage_pool_str += k+': '+v+'\n'
+                                # print(f'string - {storage_pool_str}')                                
+
+                        cursor.execute(f"SELECT id FROM glpi_plugin_fields_plugingenericobjectstoragesystemstorgeinfos WHERE items_id = {dev_db_id} and itemtype='{storage_db_type}'")
+                        r = cursor.fetchall()
+                        
+                        if (r != []):
+                            print(f'Check and create storage_system_storgeinfo - exist')
+                            pass
+                        else:
+                            cursor.execute(f"INSERT INTO glpi_plugin_fields_plugingenericobjectstoragesystemstorgeinfos (items_id, itemtype, plugin_fields_containers_id,lungroupfield,hostgroupfield,storagepoolfield) values ({dev_db_id},'{storage_db_type}', 1, '{lun_gr_str}', '{host_gr_str}', '{storage_pool_str}')")
+                            connection.commit()             
+
+
+
+
+                        # Create model glpi_plugin_genericobject_storagesystemmodels
+                        # Create manufacturer manufacturers_id
+                        # Create IP
+                        # Create MAC
+
+                        #     cursor.execute(create_storage_system_query(snmp_dev_info_dict))
+                        #         connection.commit()
+
+            except Error as e:
+                print(f'er -  {e}')            
+
+            print(f'dev_db_id - {dev_db_id}')
+            print(f'dev_db_name - {dev_db_name}')
+            print(f'dev_models_db_id - {dev_model_db_id}')
+            print(f'dev_manufacturer_db_id - {dev_manufacturer_db_id}')
+            
+            
+            # # new_file_str1 = fileStr.replace('<MODEL>MFC-9340CDW</MODEL>',
+            # # f'''<MODEL>{snmp_phone_info_dict['model']}</MODEL>
+            # # <LOCATION>{dev_location}</LOCATION>''')
+
+            # new_file_str = new_file_str1.replace('<PORT>',
+            # f'''<PORT>
+            # <IP>{host}</IP>''')
+
+            # res_inv_file = open(f'{cur_dir}/tmp/{i}_{host}_{community}_inv.xml', "w", encoding='utf-8')
+            # res_inv_file.write(new_file_str) 
+            # res_inv_file.close()
+            # try:
+            #     print(f'{host}: ingect_custom_snmp_info')  
+            #     #os.system(f'glpi-injector -v -r --file {cur_dir}/tmp/{i}_{host}_{community}_inv.xml --debug --url http://10.32.52.110/glpi/front/inventory.php')
+            # except:
+            #     print(f'error_inject_custom_snmp_info: {host}_{community}') 
+        except Exception as e:
+            print(f'!!!ingect_custom_snmp_info OceanStor Dorado 5000!!!: {i} {host}\n {e}\n')
+
     if (str(name) == 'MFC-9340CDW'):
         try:
             snmp_phone_info_dict = get_brother_MFC_9340CDW_snmp_info(host, community, name)
+																								   
+									 
+			
+																		 
+															  
+												   
 
             change_tag_value(host, community, 'LOCATION', dev_location,i)
             change_tag_value(host, community, 'MODEL', snmp_phone_info_dict['model'],i)
@@ -247,11 +500,22 @@ def ingect_custom_snmp_info(host, community, name, dev_location,i):
     if (str(name) == 'Avaya Phone'):
         try:
             snmp_phone_info_dict = get_avaya_snmp_info(host, community, name)
+																								   
+									 
 
             registration = 'registered' if snmp_phone_info_dict['reg_state']=='2' else 'not_reg'
             now = datetime.now()
             dt_string = now.strftime("%d/%m/%Y")
             last_reg_date = f'регистрация {dt_string}' if registration == 'registered' else ''
+			
+
+																 
+																	 
+							  
+											   
+											  
+																		  
+																				 
 
             change_tag_value(host, community, 'LOCATION', dev_location,i)
             change_tag_value(host, community, 'SERIAL', snmp_phone_info_dict['serial_num'],i)
@@ -295,8 +559,206 @@ def ingect_custom_snmp_info(host, community, name, dev_location,i):
         except Exception as e:
             print(f'!!!check_dev_for_custom!!!: {i} {host}\n {e}\n')          
 
-    
+
+def list_split(listA, n):
+    for x in range(0, len(listA), n):
+        every_chunk = listA[x: n+x]
+
+        if len(every_chunk) < n:
+            every_chunk = every_chunk + \
+                ['None' for y in range(n-len(every_chunk))]
+        yield every_chunk   
+
+def split_list_on_equal_parts(lst, n):
+    for i in range(0, len(lst), n):
+        yield lst[i:i + n]       
  
+def get_OceanStor_Dorado_5000_snmp_info(host, community,  name):
+    ##             1.3.6.1.4.1.34774.4.1.1.1.0
+    ## SNMPv2-SMI::enterprises.34774.4.1.1.1.0
+    ## 34774.4.1.23.4.5.1.2.2.49.
+    #print('test')
+    oid_dicts_list = {
+        'OceanStorDorado5000': {
+            'serial':'iso.3.6.1.4.1.34774.4.1.1.1',
+            # 'host_name': 'iso.3.6.1.2.1.1.5',
+            'ip_address': '1.3.6.1.4.1.34774.4.1.23.5.8.1.6',
+            'mac': '1.3.6.1.4.1.34774.4.1.23.5.6.1.10',
+            'storage_pools_count': 'iso.3.6.1.4.1.34774.4.1.23.4.2.1.1',
+            'lun_groups_count': 'iso.3.6.1.4.1.34774.4.1.23.4.7.1.1',
+            'host_groups_count': 'iso.3.6.1.4.1.34774.4.1.23.4.6.1.1',
+            'lun_groups': 'iso.3.6.1.4.1.34774.4.1.23.4.7',
+            'host_groups': 'iso.3.6.1.4.1.34774.4.1.23.4.6.1',
+            'storage_pools': '1.3.6.1.4.1.34774.4.1.23.4.2.1',
+            # 'disk_entry': '1.3.6.1.4.1.34774.4.1.23.5.1.1.26'
+        }
+    }     
+    res = {}
+    res_mod = {}
+    new_name = name.replace(' ','')
+    for oid in oid_dicts_list[new_name]:
+        res.update({oid: get_oid_param(host, oid_dicts_list[new_name][oid], community)})  
+
+    # print(f'res\n')
+    storage_pools_count = 1
+    lun_groups_count = 1
+    host_groups_count = 1
+    try:
+        storage_pools_count = len(res['storage_pools_count'].split(";"))
+    except Exception as e:
+        print(f'!!!storage_pools_count!!!:\n {e}\n')
+
+    try:
+        lun_groups_count = len(res['lun_groups_count'].split(";"))
+    except Exception as e:
+        print(f'!!!lun_groups_count!!!:\n {e}\n')
+
+    try:
+        host_groups_count = len(res['host_groups_count'].split(";"))
+    except Exception as e:
+        print(f'!!!host_groups_count!!!:\n {e}\n')
+
+    # print(f'storage_pools_count: {storage_pools_count}')      
+    for x in res:
+        
+        # if (x == 'storage_pools_count'):
+        #     # print(f'{x}: {len(res[x].slpit(";"))} \n === \n') 
+
+        arr1 = []
+        if ((res[x] !=None) and (res[x] != '')):
+            arr1 = res[x].replace(',','|').split(';')
+            if (x == 'storage_pools'):
+                try:
+                    split_arr1 = list(list_split(arr1, storage_pools_count))
+                    storage_pools_arr = []
+                    # print(f'pool_name: {split_arr1[1][2]}')
+                    storage_pools_count_list = list(range(storage_pools_count))
+                    for st in storage_pools_count_list:
+                        storage_pool_dict = {}
+
+                        pool_id = split_arr1[0][st]    
+                        pool_name = split_arr1[1][st]    
+                        pool_total_capacity = split_arr1[6][st]    
+                        pool_free_capacity = split_arr1[8][st]
+
+                        storage_pool_dict.update({pool_id: {f'{pool_id}: pool_name':pool_name, f'{pool_id}: pool_total_capacity': str(math.floor(int(pool_total_capacity)/1000000)) + ' ГБ', f'{pool_id}: pool_free_capacity': str(math.floor(int(pool_free_capacity)/1000000)) + ' ГБ'}})
+                        storage_pools_arr.append(storage_pool_dict)
+                    for el in storage_pools_arr:
+                        print(f'storage_pool: {el}\n')
+
+                    res_mod.update({x: storage_pools_arr})
+                except Exception as e:
+                    print(f'!!!get_storage_pools!!!: \n {e}\n')  
+
+            elif (x == 'lun_groups'):
+                if (arr1 != []):
+                    try:
+                        split_arr1 = list(list_split(arr1, lun_groups_count)) 
+                        lun_groups_arr = []
+                        lun_groups_count_list = list(range(lun_groups_count))
+                        for el in lun_groups_count_list:
+                            # print(f'{el}\n---\n')
+                            lun_group_dict = {}   
+                            lun_group_id = split_arr1[0][el]
+                            lun_group_name = split_arr1[1][el]
+                            lun_group_lun_list = split_arr1[2][el]
+                            lun_group_dict.update({lun_group_id: {f'{lun_group_id}: lun_group_name': lun_group_name, f'{lun_group_id}: lun_group_lun_list': lun_group_lun_list}})
+                            lun_groups_arr.append(lun_group_dict)
+                        for el in lun_groups_arr:
+                            print(f'lun_group: {el}\n')    
+                        res_mod.update({x: lun_groups_arr})
+                        
+                    except Exception as e:
+                        print(f'!!!get_lun_groups!!!: \n {e}\n')    
+                else: res_mod.update({x:[]})  
+
+            elif (x == 'host_groups'):
+                if (arr1 != []):
+                    try:
+                        split_arr1 = list(list_split(arr1, host_groups_count)) 
+                        host_groups_arr = []
+                        host_groups_count_list = list(range(host_groups_count))
+                        for el in host_groups_count_list:
+                            # print(f'{el}\n---\n')
+                            host_group_dict = {} 
+                            host_group_id = split_arr1[0][el]
+                            host_group_name = split_arr1[1][el]
+                            host_group_host_list = split_arr1[2][el]
+                            host_group_dict.update({host_group_id: {f'{host_group_id}: host_group_name': host_group_name, f'{host_group_id}: host_group_host_list': host_group_host_list}})
+                            host_groups_arr.append(host_group_dict)
+                        for el in host_groups_arr:
+                            print(f'host_group: {el}\n')    
+                        res_mod.update({x: host_groups_arr})
+                        
+                    except Exception as e:
+                        print(f'!!!get_lun_groups!!!: \n {e}\n')    
+                else: res_mod.update({x:[]})  
+
+            # elif (x == 'host_groups'):
+            #     host_group_id = arr1[0]
+            #     host_group_name = arr1[1]
+            #     host_group_lun_list = arr1[2]
+            #     res_mod.update({x: [{host_group_id: {'host_group_name': host_group_name, 'host_group_lun_list': host_group_lun_list}}]})
+
+            elif (x == 'ip_address'):
+                
+                ip_arr = []
+                if (arr1 != []):
+                    for ip in arr1:
+                        if (ip != ''):
+                            ip_arr.append(ip)
+                # print(f'ip = {ip_arr}')            
+                res_mod.update({x: ip_arr})
+																						
+			  
+
+            elif (x == 'disk_entry'):
+                count = math.floor(len(arr1)/26)
+                for disk in arr1:
+                    print(disk.encode())
+                # splits = np.array_split(arr1, 26)
+                # for array in splits:
+                #     print(list(array))   
+
+					  
+					  
+								  
+				
+				
+
+            else:
+                res_mod.update({x: arr1})
+
+        else:  res_mod.update({x: []})       
+    # print('-------------')        
+    # for k,v in res_mod.items():
+    #     print(k, v)                     
+    return res_mod    
+
+# def get_brother_MFC_9340CDW_snmp_info(host, community,  name):
+#     oid_dicts_list = {
+#         'MFC-9340CDW': {
+#             'model':'iso.3.6.1.2.1.25.3.2.1.3',
+#         }
+#     }     
+#     res = {}
+#     new_name = name.replace(' ','')
+#     for oid in oid_dicts_list[new_name]:
+#         res.update({oid: get_oid_param(host, oid_dicts_list[new_name][oid], community)})  
+#     return res
+
+# def get_brother_NC_9300h_snmp_info(host, community,  name):
+#     oid_dicts_list = {
+#         'BrotherNC-9300h': {
+#             'model':'iso.3.6.1.2.1.25.3.2.1.3',
+#         }
+#     }     
+#     res = {}
+#     new_name = name.replace(' ','')
+#     for oid in oid_dicts_list[new_name]:
+#         res.update({oid: get_oid_param(host, oid_dicts_list[new_name][oid], community)})
+#     return res
+
 
 def get_brother_MFC_9340CDW_snmp_info(host, community,  name):
     oid_dicts_list = {
@@ -363,6 +825,8 @@ def get_avaya_snmp_info(host, community,  name):
 
 
 cmdGen = cmdgen.CommandGenerator()
+												  
+
 def get_oid_param(dev_ip, oid_type, community):
     errorIndication, errorStatus, errorIndex, varBindTable = cmdGen.nextCmd(
     cmdgen.CommunityData(community),
@@ -385,10 +849,11 @@ def get_oid_param(dev_ip, oid_type, community):
             try:
                 for varBindTableRow in varBindTable:
                     for name, val in varBindTableRow:
-                        # print(name.prettyPrint(), val.prettyPrint())
+                        # if (oid_type == 'iso.3.6.1.4.1.34774.4.1.23.4.2.1.1'):
+                        #     print(f'!!!!!!!! {name.prettyPrint(), val.prettyPrint()}')
                         current_param += val.prettyPrint()
                         current_param += ';'
-                # print('---')        
+                # print('---')                        
                 # print(current_param[:-1])        
                 return current_param[:-1]
             except Exception as e:
@@ -409,7 +874,9 @@ def get_oid_param(dev_ip, oid_type, community):
 #             current_param = ''
 #             for varBindTableRow in varBindTable:
 #                 for name, val in varBindTableRow:
+																  
 #                     current_param += val.prettyPrint()
+				   
 #                 return current_param
 
 
@@ -465,8 +932,6 @@ def add_dev_inventory(id_region_net_tuple,i):
 
 
 def th_func(pirocid_region_net_list, i):
-
-    
     if (pirocid_region_net_list[i] != None):
         for id_region_net_tuple in pirocid_region_net_list[i]:
 

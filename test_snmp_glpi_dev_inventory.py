@@ -39,15 +39,28 @@ date_now =  datetime.now().strftime("%d-%m-%Y")
 
 parts_count = 1
 
-community_list = [ 'public', 'Avaya_RO', 'gvc_RD']
+community_list = ['Avaya_RO','gvc_RD','public']
 # community_list = ['Avaya_RO', 'gvc_RD']
 custom_names_list = ['OceanStor Dorado 5000','Avaya Phone', 'Brother NC-9300h', 'MFC-9340CDW']
 
+# def check_snmp_community_connect(host, community):
+#     try:
+#         cmd = f'snmpwalk -r1 -t1  -L n -v2c -c {community} {host} 1.3.6.1.2.1.1.3'
+#         res = os.system(f'{cmd}')
+#         print(f'res: \n {res}\n ====')
+#         if (res == 0):
+#             return True
+#         else:
+#             return False
+#     except:
+#         print(f'error_check_snmp_community_connect: {host}_{community}')
+#         return False     
+
 def check_snmp_community_connect(host, community):
     try:
-        cmd = f'snmpwalk -r1 -t1  -L n -v2c -c {community} {host} 1.3.6.1.2.1.1.3'
-        res = os.system(f'{cmd}')
-        if (res == 0):
+        res = get_oid_param(host, '1.3.6.1.2.1.1.3', community)
+        print(f'res: \n{res} - {community}')
+        if (res != None and res != ''):
             return True
         else:
             return False
@@ -190,7 +203,7 @@ def inject_dev(host, community, location,i):
         print(f'change_tag_value: {host}_{community}')    
     try:
         print(f'{host}: inject_dev')    
-        os.system(f'glpi-injector -v -r --file {cur_dir}/tmp/{i}_{host}_{community}_inv.xml --debug --url http://10.32.52.110/glpi/front/inventory.php')
+        os.system(f'glpi-injector -v --file {cur_dir}/tmp/{i}_{host}_{community}_inv.xml --debug --url http://10.32.52.110/glpi/front/inventory.php')
     except:
         print(f'error_inject_dev: {host}_{community}')
 
@@ -219,12 +232,13 @@ def ingect_custom_snmp_info(host, community, name, dev_location,i):
     if (str(name) == 'OceanStor Dorado 5000'):
         try:
             snmp_dev_info_dict = get_OceanStor_Dorado_5000_snmp_info(host, community, name)
+            # print(snmp_dev_info_dict)
 
             # print(snmp_dev_info_dict)
             inv_file = open(f'{cur_dir}/tmp/{i}_{host}_{community}_inv.xml', "r", encoding='utf-8')
             fileStr = inv_file.read()
             model = snmp_dev_info_dict['model'][0]
-            print(f'!!model {model}')
+            # print(f'!!model {model}')
             # model = find_value_in_tag('MODEL', fileStr)
             name = find_value_in_tag('NAME', fileStr)
             manufacturer = find_value_in_tag('MANUFACTURER', fileStr)
@@ -245,6 +259,8 @@ def ingect_custom_snmp_info(host, community, name, dev_location,i):
             dev_lun_groups = snmp_dev_info_dict['lun_groups']
             dev_host_groups = snmp_dev_info_dict['host_groups']
             dev_storage_pools = snmp_dev_info_dict['storage_pools']
+
+            print(f'DEV_MODEL: {dev_model}')
 
             dev_db_name = None
             dev_model_db_id = None     
@@ -292,10 +308,36 @@ def ingect_custom_snmp_info(host, community, name, dev_location,i):
                         
                         #### IF DEV EXIST
                         else:
+                            # dev_db_id = r[0][0]
                             dev_db_id = r[0][0]
                             dev_db_name = r[0][1]
                             dev_manufacturer_db_id = r[0][2] 
                             dev_model_db_id = r[0][3]
+
+                            ### check and update model
+                            cursor.execute(f"SELECT name FROM glpi_plugin_genericobject_storagesystemmodels WHERE id={dev_model_db_id}")
+                            r = cursor.fetchall()
+                            if (r != []):
+                                if (r[0][0] != dev_model):
+                                    cursor.execute(f"SELECT id FROM glpi_plugin_genericobject_storagesystemmodels WHERE name='{dev_model}'")
+                                    r = cursor.fetchall() 
+                                    if (r == []):
+                                        cursor.execute(f"INSERT INTO glpi_plugin_genericobject_storagesystemmodels (name, date_creation) values ('{dev_model}', now())")
+                                        connection.commit()
+                                        cursor.execute(f"SELECT id FROM glpi_plugin_genericobject_storagesystemmodels WHERE name='{dev_model}'")
+                                        r = cursor.fetchall() 
+                                        if (r != []):
+                                            dev_model_db_id = r[0][0]
+                                    else:
+                                        cursor.execute(f"SELECT id FROM glpi_plugin_genericobject_storagesystemmodels WHERE name='{dev_model}'")
+                                        r = cursor.fetchall() 
+                                        dev_model_db_id = r[0][0]    
+
+                                    cursor.execute(f"UPDATE glpi_plugin_genericobject_storagesystems SET plugin_genericobject_storagesystemmodels_id={dev_model_db_id}, date_mod=NOW() WHERE id={dev_db_id} ")
+                                    connection.commit()
+                                    
+
+                        ###################################################    
 
                         #### Check and create IPs
                         for ip in dev_ips:
@@ -466,7 +508,7 @@ def ingect_custom_snmp_info(host, community, name, dev_location,i):
             # res_inv_file.close()
             try:
                 print(f'{host}: ingect_custom_snmp_info')  
-                os.system(f'glpi-injector -v -r --file {cur_dir}/tmp/{i}_{host}_{community}_inv.xml --debug --url http://10.32.52.110/glpi/front/inventory.php')
+                os.system(f'glpi-injector -v --file {cur_dir}/tmp/{i}_{host}_{community}_inv.xml --debug --url http://10.32.52.110/glpi/front/inventory.php')
             except:
                 print(f'error_inject_custom_snmp_info: {host}_{community}') 
         except Exception as e:
@@ -492,7 +534,7 @@ def ingect_custom_snmp_info(host, community, name, dev_location,i):
             # res_inv_file.write(new_file_str) 
             # res_inv_file.close()
             try:
-                os.system(f'glpi-injector -v -r --file {cur_dir}/tmp/{i}_{host}_{community}_inv.xml --debug --url http://10.32.52.110/glpi/front/inventory.php')
+                os.system(f'glpi-injector -v --file {cur_dir}/tmp/{i}_{host}_{community}_inv.xml --debug --url http://10.32.52.110/glpi/front/inventory.php')
             except:
                 print(f'error_inject_custom_snmp_info: {host}_{community}') 
         except Exception as e:
@@ -509,15 +551,6 @@ def ingect_custom_snmp_info(host, community, name, dev_location,i):
             now = datetime.now()
             dt_string = now.strftime("%d/%m/%Y")
             last_reg_date = f'регистрация {dt_string}' if registration == 'registered' else ''
-			
-
-																 
-																	 
-							  
-											   
-											  
-																		  
-																				 
 
             change_tag_value(host, community, 'LOCATION', dev_location,i)
             change_tag_value(host, community, 'SERIAL', snmp_phone_info_dict['serial_num'],i)
@@ -545,7 +578,7 @@ def ingect_custom_snmp_info(host, community, name, dev_location,i):
             # res_inv_file.write(new_file_str) 
             # res_inv_file.close()
             try:
-                os.system(f'glpi-injector -v -r --file {cur_dir}/tmp/{i}_{host}_{community}_inv.xml --debug --url http://10.32.52.110/glpi/front/inventory.php')
+                os.system(f'glpi-injector -v --file {cur_dir}/tmp/{i}_{host}_{community}_inv.xml --debug --url http://10.32.52.110/glpi/front/inventory.php')
             except:
                 print(f'error_inject_custom_snmp_info: {host}_{community}') 
 
@@ -624,14 +657,19 @@ def get_OceanStor_Dorado_5000_snmp_info(host, community,  name):
     except Exception as e:
         print(f'!!!host_groups_count!!!:\n {e}\n')
 
-    # print(f'storage_pools_count: {storage_pools_count}')      
+    # print(f'storage_pools_count: {storage_pools_count}')     
     for x in res:
-        
+        # print(f'+++\n{x}: {res[x]}\n+++++')
         if (x == 'model'):
             try:
-                
-                res[x] = '123'
-                print(f'{x}: {res[x]} \n === \n') 
+                # res[x] = '123'
+                model = ''
+                desc = re.search(r'Description=.*', res[x])
+                if (desc != None):
+                    model = desc.group(0).replace('Description=', '').split(',')[0]
+                # print(f'{x}: {model}\n===\n')
+                res[x] = model
+                # print(res_mod)
             except Exception as e:
                 print(f'!!!model!!! \n {e}\n')    
 
@@ -734,7 +772,7 @@ def get_OceanStor_Dorado_5000_snmp_info(host, community,  name):
                 res_mod.update({x: arr1})
 
         else:  res_mod.update({x: []})       
-    # print('-------------')        
+    print('-------------')        
     # for k,v in res_mod.items():
     #     print(k, v)                     
     return res_mod    

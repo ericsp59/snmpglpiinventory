@@ -6,7 +6,6 @@ from copy import copy, deepcopy
 import nmap
 import json
 import re
-from datetime import datetime
 from sys import argv
 import os
 import ipaddress
@@ -39,15 +38,28 @@ date_now =  datetime.now().strftime("%d-%m-%Y")
 
 parts_count = 1
 
-community_list = [ 'public', 'Avaya_RO', 'gvc_RD']
+community_list = ['Avaya_RO','gvc_RD','public']
 # community_list = ['Avaya_RO', 'gvc_RD']
-custom_names_list = ['OceanStor Dorado 5000','Avaya Phone', 'Brother NC-9300h', 'MFC-9340CDW']
+custom_names_list = ['OceanStor Dorado 5000','Avaya Phone', 'Brother NC-9300h', 'MFC-9340CDW', 'SNMP Card for UPS']
+
+# def check_snmp_community_connect(host, community):
+#     try:
+#         cmd = f'snmpwalk -r1 -t1  -L n -v2c -c {community} {host} 1.3.6.1.2.1.1.3'
+#         res = os.system(f'{cmd}')
+#         print(f'res: \n {res}\n ====')
+#         if (res == 0):
+#             return True
+#         else:
+#             return False
+#     except:
+#         print(f'error_check_snmp_community_connect: {host}_{community}')
+#         return False     
 
 def check_snmp_community_connect(host, community):
     try:
-        cmd = f'snmpwalk -r1 -t1  -L n -v2c -c {community} {host} 1.3.6.1.2.1.1.3'
-        res = os.system(f'{cmd}')
-        if (res == 0):
+        res = get_oid_param(host, '1.3.6.1.2.1.1.3', community)
+        print(f'res: \n{res} - {community}')
+        if (res != None and res != ''):
             return True
         else:
             return False
@@ -190,7 +202,7 @@ def inject_dev(host, community, location,i):
         print(f'change_tag_value: {host}_{community}')    
     try:
         print(f'{host}: inject_dev')    
-        os.system(f'glpi-injector -v -r --file {cur_dir}/tmp/{i}_{host}_{community}_inv.xml --debug --url http://10.32.52.110/glpi/front/inventory.php')
+        os.system(f'glpi-injector -v --file {cur_dir}/tmp/{i}_{host}_{community}_inv.xml --debug --url http://10.32.52.110/glpi/front/inventory.php')
     except:
         print(f'error_inject_dev: {host}_{community}')
 
@@ -219,11 +231,14 @@ def ingect_custom_snmp_info(host, community, name, dev_location,i):
     if (str(name) == 'OceanStor Dorado 5000'):
         try:
             snmp_dev_info_dict = get_OceanStor_Dorado_5000_snmp_info(host, community, name)
+            # print(snmp_dev_info_dict)
 
             # print(snmp_dev_info_dict)
             inv_file = open(f'{cur_dir}/tmp/{i}_{host}_{community}_inv.xml', "r", encoding='utf-8')
             fileStr = inv_file.read()
-            model = find_value_in_tag('MODEL', fileStr)
+            model = snmp_dev_info_dict['model'][0]
+            # print(f'!!model {model}')
+            # model = find_value_in_tag('MODEL', fileStr)
             name = find_value_in_tag('NAME', fileStr)
             manufacturer = find_value_in_tag('MANUFACTURER', fileStr)
 
@@ -231,8 +246,8 @@ def ingect_custom_snmp_info(host, community, name, dev_location,i):
             snmp_dev_info_dict.update({'model':[model]})
             snmp_dev_info_dict.update({'manufacturer': [manufacturer]})
 
-            for key, val in snmp_dev_info_dict.items():
-                print(f'{key}: {val}')
+            # for key, val in snmp_dev_info_dict.items():
+            #     print(f'{key}: {val}')
 
             dev_name = snmp_dev_info_dict['name'][0]
             dev_serial = snmp_dev_info_dict['serial'][0]
@@ -243,6 +258,8 @@ def ingect_custom_snmp_info(host, community, name, dev_location,i):
             dev_lun_groups = snmp_dev_info_dict['lun_groups']
             dev_host_groups = snmp_dev_info_dict['host_groups']
             dev_storage_pools = snmp_dev_info_dict['storage_pools']
+
+            print(f'DEV_MODEL: {dev_model}')
 
             dev_db_name = None
             dev_model_db_id = None     
@@ -290,10 +307,36 @@ def ingect_custom_snmp_info(host, community, name, dev_location,i):
                         
                         #### IF DEV EXIST
                         else:
+                            # dev_db_id = r[0][0]
                             dev_db_id = r[0][0]
                             dev_db_name = r[0][1]
                             dev_manufacturer_db_id = r[0][2] 
                             dev_model_db_id = r[0][3]
+
+                            ### check and update model
+                            cursor.execute(f"SELECT name FROM glpi_plugin_genericobject_storagesystemmodels WHERE id={dev_model_db_id}")
+                            r = cursor.fetchall()
+                            if (r != []):
+                                if (r[0][0] != dev_model):
+                                    cursor.execute(f"SELECT id FROM glpi_plugin_genericobject_storagesystemmodels WHERE name='{dev_model}'")
+                                    r = cursor.fetchall() 
+                                    if (r == []):
+                                        cursor.execute(f"INSERT INTO glpi_plugin_genericobject_storagesystemmodels (name, date_creation) values ('{dev_model}', now())")
+                                        connection.commit()
+                                        cursor.execute(f"SELECT id FROM glpi_plugin_genericobject_storagesystemmodels WHERE name='{dev_model}'")
+                                        r = cursor.fetchall() 
+                                        if (r != []):
+                                            dev_model_db_id = r[0][0]
+                                    else:
+                                        cursor.execute(f"SELECT id FROM glpi_plugin_genericobject_storagesystemmodels WHERE name='{dev_model}'")
+                                        r = cursor.fetchall() 
+                                        dev_model_db_id = r[0][0]    
+
+                                    cursor.execute(f"UPDATE glpi_plugin_genericobject_storagesystems SET plugin_genericobject_storagesystemmodels_id={dev_model_db_id}, date_mod=NOW() WHERE id={dev_db_id} ")
+                                    connection.commit()
+                                    
+
+                        ###################################################    
 
                         #### Check and create IPs
                         for ip in dev_ips:
@@ -437,16 +480,24 @@ def ingect_custom_snmp_info(host, community, name, dev_location,i):
         except Exception as e:
             print(f'!!!ingect_custom_snmp_info OceanStor Dorado 5000!!!: {i} {host}\n {e}\n')
 
+    if (str(name) == 'SNMP Card for UPS'):
+        try:
+            snmp_devinfo_dict = get_SNMP_Card_for_UPS_snmp_info(host, community, name)
+            # print(snmp_devinfo_dict)
+            change_tag_value(host, community, 'LOCATION', dev_location,i)
+            change_tag_value(host, community, 'MODEL', snmp_devinfo_dict['model'],i)
+            change_tag_value(host, community, 'SERIAL', snmp_devinfo_dict['serial'],i)
+            try:
+                print(f'{host}: ingect_custom_snmp_info')  
+                os.system(f'glpi-injector -v --file {cur_dir}/tmp/{i}_{host}_{community}_inv.xml --debug --url http://10.32.52.110/glpi/front/inventory.php')
+            except:
+                print(f'error_inject_custom_snmp_info: {host}_{community}') 
+        except Exception as e:
+            print(f'Error: {name}\n{e}')    
+
     if (str(name) == 'MFC-9340CDW'):
         try:
             snmp_phone_info_dict = get_brother_MFC_9340CDW_snmp_info(host, community, name)
-																								   
-									 
-			
-																		 
-															  
-												   
-
             change_tag_value(host, community, 'LOCATION', dev_location,i)
             change_tag_value(host, community, 'MODEL', snmp_phone_info_dict['model'],i)
             change_port_ip(host, community, 'IP', host,i)
@@ -464,7 +515,7 @@ def ingect_custom_snmp_info(host, community, name, dev_location,i):
             # res_inv_file.close()
             try:
                 print(f'{host}: ingect_custom_snmp_info')  
-                os.system(f'glpi-injector -v -r --file {cur_dir}/tmp/{i}_{host}_{community}_inv.xml --debug --url http://10.32.52.110/glpi/front/inventory.php')
+                os.system(f'glpi-injector -v --file {cur_dir}/tmp/{i}_{host}_{community}_inv.xml --debug --url http://10.32.52.110/glpi/front/inventory.php')
             except:
                 print(f'error_inject_custom_snmp_info: {host}_{community}') 
         except Exception as e:
@@ -490,7 +541,7 @@ def ingect_custom_snmp_info(host, community, name, dev_location,i):
             # res_inv_file.write(new_file_str) 
             # res_inv_file.close()
             try:
-                os.system(f'glpi-injector -v -r --file {cur_dir}/tmp/{i}_{host}_{community}_inv.xml --debug --url http://10.32.52.110/glpi/front/inventory.php')
+                os.system(f'glpi-injector -v --file {cur_dir}/tmp/{i}_{host}_{community}_inv.xml --debug --url http://10.32.52.110/glpi/front/inventory.php')
             except:
                 print(f'error_inject_custom_snmp_info: {host}_{community}') 
         except Exception as e:
@@ -507,15 +558,6 @@ def ingect_custom_snmp_info(host, community, name, dev_location,i):
             now = datetime.now()
             dt_string = now.strftime("%d/%m/%Y")
             last_reg_date = f'регистрация {dt_string}' if registration == 'registered' else ''
-			
-
-																 
-																	 
-							  
-											   
-											  
-																		  
-																				 
 
             change_tag_value(host, community, 'LOCATION', dev_location,i)
             change_tag_value(host, community, 'SERIAL', snmp_phone_info_dict['serial_num'],i)
@@ -543,7 +585,7 @@ def ingect_custom_snmp_info(host, community, name, dev_location,i):
             # res_inv_file.write(new_file_str) 
             # res_inv_file.close()
             try:
-                os.system(f'glpi-injector -v -r --file {cur_dir}/tmp/{i}_{host}_{community}_inv.xml --debug --url http://10.32.52.110/glpi/front/inventory.php')
+                os.system(f'glpi-injector -v --file {cur_dir}/tmp/{i}_{host}_{community}_inv.xml --debug --url http://10.32.52.110/glpi/front/inventory.php')
             except:
                 print(f'error_inject_custom_snmp_info: {host}_{community}') 
 
@@ -571,15 +613,38 @@ def list_split(listA, n):
 
 def split_list_on_equal_parts(lst, n):
     for i in range(0, len(lst), n):
-        yield lst[i:i + n]       
+        yield lst[i:i + n]  
+
+def get_SNMP_Card_for_UPS_snmp_info(host, community, name):
+    oid_dicts_list = {
+        'SNMPCardforUPS': {
+            'model':'1.3.6.1.4.1.55814.1.1.1.1.2.4',
+            'serial':'1.3.6.1.4.1.55814.1.1.1.1.2.1'
+        }    
+    } 
+    res = {}
+    new_name = name.replace(' ','')
+    for oid in oid_dicts_list[new_name]:
+        try:
+            res_oid = get_oid_param(host, oid_dicts_list[new_name][oid], community)
+            # print(f'!!!res_oid: {res_oid}!!!')
+            res.update({
+                oid: res_oid
+                })
+        except Exception as e:
+            print(f'!!!res_oid!!!: {i} {host} {oid}\n {e}\n{res_oid}\n')      
+    return res                    
  
 def get_OceanStor_Dorado_5000_snmp_info(host, community,  name):
     ##             1.3.6.1.4.1.34774.4.1.1.1.0
     ## SNMPv2-SMI::enterprises.34774.4.1.1.1.0
     ## 34774.4.1.23.4.5.1.2.2.49.
     #print('test')
+    
     oid_dicts_list = {
         'OceanStorDorado5000': {
+            'model':'1.3.6.1.4.1.34774.4.1.23.5.6.1.13.1',
+            # 'model':'1.3.6.1.4.1.34774.4.1.23.5.6.1.13.1.48',
             'serial':'iso.3.6.1.4.1.34774.4.1.1.1',
             # 'host_name': 'iso.3.6.1.2.1.1.5',
             'ip_address': '1.3.6.1.4.1.34774.4.1.23.5.8.1.6',
@@ -599,7 +664,8 @@ def get_OceanStor_Dorado_5000_snmp_info(host, community,  name):
     for oid in oid_dicts_list[new_name]:
         res.update({oid: get_oid_param(host, oid_dicts_list[new_name][oid], community)})  
 
-    # print(f'res\n')
+    # for el in res:
+    #     print(f'{el}:{res[el]}\n')
     storage_pools_count = 1
     lun_groups_count = 1
     host_groups_count = 1
@@ -618,11 +684,21 @@ def get_OceanStor_Dorado_5000_snmp_info(host, community,  name):
     except Exception as e:
         print(f'!!!host_groups_count!!!:\n {e}\n')
 
-    # print(f'storage_pools_count: {storage_pools_count}')      
+    # print(f'storage_pools_count: {storage_pools_count}')     
     for x in res:
-        
-        # if (x == 'storage_pools_count'):
-        #     # print(f'{x}: {len(res[x].slpit(";"))} \n === \n') 
+        # print(f'+++\n{x}: {res[x]}\n+++++')
+        if (x == 'model'):
+            try:
+                # res[x] = '123'
+                model = ''
+                desc = re.search(r'Description=.*', res[x])
+                if (desc != None):
+                    model = desc.group(0).replace('Description=', '').split(',')[0]
+                # print(f'{x}: {model}\n===\n')
+                res[x] = model
+                # print(res_mod)
+            except Exception as e:
+                print(f'!!!model!!! \n {e}\n')    
 
         arr1 = []
         if ((res[x] !=None) and (res[x] != '')):
@@ -643,8 +719,8 @@ def get_OceanStor_Dorado_5000_snmp_info(host, community,  name):
 
                         storage_pool_dict.update({pool_id: {f'{pool_id}: pool_name':pool_name, f'{pool_id}: pool_total_capacity': str(math.floor(int(pool_total_capacity)/1000000)) + ' ГБ', f'{pool_id}: pool_free_capacity': str(math.floor(int(pool_free_capacity)/1000000)) + ' ГБ'}})
                         storage_pools_arr.append(storage_pool_dict)
-                    for el in storage_pools_arr:
-                        print(f'storage_pool: {el}\n')
+                    # for el in storage_pools_arr:
+                    #     print(f'storage_pool: {el}\n')
 
                     res_mod.update({x: storage_pools_arr})
                 except Exception as e:
@@ -664,8 +740,8 @@ def get_OceanStor_Dorado_5000_snmp_info(host, community,  name):
                             lun_group_lun_list = split_arr1[2][el]
                             lun_group_dict.update({lun_group_id: {f'{lun_group_id}: lun_group_name': lun_group_name, f'{lun_group_id}: lun_group_lun_list': lun_group_lun_list}})
                             lun_groups_arr.append(lun_group_dict)
-                        for el in lun_groups_arr:
-                            print(f'lun_group: {el}\n')    
+                        # for el in lun_groups_arr:
+                        #     print(f'lun_group: {el}\n')    
                         res_mod.update({x: lun_groups_arr})
                         
                     except Exception as e:
@@ -686,8 +762,8 @@ def get_OceanStor_Dorado_5000_snmp_info(host, community,  name):
                             host_group_host_list = split_arr1[2][el]
                             host_group_dict.update({host_group_id: {f'{host_group_id}: host_group_name': host_group_name, f'{host_group_id}: host_group_host_list': host_group_host_list}})
                             host_groups_arr.append(host_group_dict)
-                        for el in host_groups_arr:
-                            print(f'host_group: {el}\n')    
+                        # for el in host_groups_arr:
+                            # print(f'host_group: {el}\n')    
                         res_mod.update({x: host_groups_arr})
                         
                     except Exception as e:
@@ -719,18 +795,11 @@ def get_OceanStor_Dorado_5000_snmp_info(host, community,  name):
                 # splits = np.array_split(arr1, 26)
                 # for array in splits:
                 #     print(list(array))   
-
-					  
-					  
-								  
-				
-				
-
             else:
                 res_mod.update({x: arr1})
 
         else:  res_mod.update({x: []})       
-    # print('-------------')        
+    print('-------------')        
     # for k,v in res_mod.items():
     #     print(k, v)                     
     return res_mod    
@@ -832,7 +901,9 @@ def get_oid_param(dev_ip, oid_type, community):
     cmdgen.CommunityData(community),
     cmdgen.UdpTransportTarget((dev_ip, 161)),  
     cmdgen.MibVariable(oid_type),
-    lookupMib=True,   
+    lookupMib=True,
+    lookupNames=True,
+    lookupValues=True,   
     )
 
     if errorIndication:
@@ -845,12 +916,21 @@ def get_oid_param(dev_ip, oid_type, community):
             errorIndex and varBindTable[-1][int(errorIndex)-1] or '?'))
         else:
             current_dict = {}
-            current_param = ''
+            current_param = ''  
             try:
-                for varBindTableRow in varBindTable:
+                for varBindTableRow in varBindTable: 
+
                     for name, val in varBindTableRow:
-                        # if (oid_type == 'iso.3.6.1.4.1.34774.4.1.23.4.2.1.1'):
-                        #     print(f'!!!!!!!! {name.prettyPrint(), val.prettyPrint()}')
+                        # print(f'{name}: {type(val)}')
+                        # print(f'{name}: {type(val.prettyPrint())}\n')
+                        if (oid_type == '1.3.6.1.4.1.34774.4.1.23.5.6.1.13.1'):
+                        #     print(f'{name}: {type(val)}')
+                            raw_string = val.asOctets()
+                            raw_string_decode = raw_string.decode('utf-8')
+                            # current_param += raw_string
+                            # current_param += ';'
+                            return raw_string_decode
+
                         current_param += val.prettyPrint()
                         current_param += ';'
                 # print('---')                        
@@ -980,10 +1060,3 @@ for i, pirocid_region_net_list in enumerate(networks_spliting_list):
         if (count == i):
             th = Thread(target=th_func, args=(networks_spliting_list, i))
             th.start()
-
-
-
-
-
-
-
